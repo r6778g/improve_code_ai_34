@@ -58,7 +58,7 @@ export default function Page() {
 
       const data = await res.json();
 
-      // Redirect to results page with query params
+
       const query = new URLSearchParams({
         input: data.input,
         input_type: data.input_type,
