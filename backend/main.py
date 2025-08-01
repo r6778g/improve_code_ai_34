@@ -14,7 +14,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-os.environ["HF_API_KEY"] = "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"
+os.environ["HF_API_KEY"] = "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"
 
 API_URL = "https://router.huggingface.co/v1/chat/completions"
 headers = {
@@ -27,7 +27,7 @@ def query_huggingface(text: str):
         "messages": [
             {
                 "role": "system",
-                "content": f"You are an expert software engineer. Analyze the following code written in any programming language - Identify and fix any bugs or syntax errors.- Improve code readability, performance, and maintainability.- Follow best practices for the respective language.- Add comments where helpful for clarity.Here is the code to review:\n{text}"
+                "content": f"Review this code and give feedback on:  Bugs or logical issues  Readability and performance  Security and best practices  Test coverage and maintainability Also, Suggested code fixes where relevant.\n{text}"
             }
         ],
         "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct:novita"

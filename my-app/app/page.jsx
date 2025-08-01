@@ -60,8 +60,7 @@ export default function Page() {
 
 
       const query = new URLSearchParams({
-        input: data.input,
-        input_type: data.input_type,
+        
         model_response: data.model_response,
       });
 
