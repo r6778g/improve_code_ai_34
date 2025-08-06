@@ -1,10 +1,10 @@
-from fastapi import FastAPI, Form, HTTPException
+from fastapi import FastAPI, Form, HTTPException, Request
 import os
 import requests
 import logging
 import traceback
 from fastapi.middleware.cors import CORSMiddleware
-# this is the test perpsh.in github
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -13,10 +13,104 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["https://8939872d51c8.ngrok-free.app"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN","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")
+headers1 = {
+    "Authorization": "Bearer {GITHUB_TOKEN}",
+    "Accept": "application/vnd.github.v3+json"
+}
+
+@app.post("/")
+async def github_webhook(request: Request):
+    try:
+        payload = await request.json()
+        
+        # Check if this is a pull request event
+        if "pull_request" not in payload:
+            logger.info("Not a pull request event, ignoring")
+            return {"message": "Not a PR event"}
+        
+        # Extract basic info
+        action = payload.get("action")
+        pr_data = payload.get("pull_request")
+        
+        if not pr_data:
+            logger.warning("No pull request data found")
+            return {"message": "No PR data"}
+        
+        repo = payload["repository"]["name"]
+        owner = payload["repository"]["owner"]["login"]
+        pr_number = pr_data["number"]
+        
+        logger.info(f"Processing PR #{pr_number} in {owner}/{repo}, action: {action}")
+        
+        # Handle different PR actions
+        if action == "edited":
+            # Check what was edited
+            changes = payload.get("changes", {})
+            if "body" in changes or "title" in changes:
+                logger.info(f"PR #{pr_number} title/description was edited")
+                # You might want to re-analyze if description contains special commands
+                # For now, we'll skip file processing since code didn't change
+                return {"message": "PR metadata edited, no file processing needed"}
+            else:
+                logger.info(f"PR #{pr_number} edited but no relevant changes detected")
+                return {"message": "PR edited but no action needed"}
+        
+        # Process code-related actions
+        if action not in ["opened", "synchronize", "reopened"]:
+            logger.info(f"Ignoring action: {action}")
+            return {"message": f"Action {action} ignored"}
+        
+        # Get PR files
+        url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/files"
+        logger.info(f"Fetching files from: {url}")
+        
+        response = requests.get(url, headers=headers1, timeout=30)
+        
+        if response.status_code == 401:
+            logger.error("GitHub API authentication failed - check your GITHUB_TOKEN")
+            raise HTTPException(status_code=500, detail="GitHub authentication failed")
+        elif response.status_code == 403:
+            logger.error("GitHub API rate limit or insufficient permissions")
+            raise HTTPException(status_code=500, detail="GitHub API access denied")
+        elif response.status_code != 200:
+            logger.error(f"GitHub API error: {response.status_code} - {response.text}")
+            raise HTTPException(status_code=500, detail="Failed to fetch PR files")
+        
+        files = response.json()
+        
+        logger.info(f"Found {len(files)} files in PR #{pr_number}")
+        
+        for file in files:
+            filename = file.get("filename", "Unknown")
+            status = file.get("status", "Unknown")
+            additions = file.get("additions", 0)
+            deletions = file.get("deletions", 0)
+            patch = file.get("patch", "No patch available")
+            
+            print(f"📄 File: {filename}")
+            print(f"📊 Status: {status} (+{additions}/-{deletions})")
+            print(f"📝 Patch:\n{patch}")
+            print("-" * 80)
+        
+        # Here you can add your custom logic to process the files
+        # For example: code review, testing, deployment, etc.
+        
+        return {
+            "message": "Webhook processed successfully",
+            "pr_number": pr_number,
+            "files_count": len(files),
+            "repository": f"{owner}/{repo}"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error processing webhook: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Webhook processing failed: {str(e)}")
+
 
 HF_API_KEY = os.getenv("HF_API_KEY", "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")
 
@@ -28,7 +122,6 @@ headers = {
 
 def query_huggingface(text: str):
     try:
-       
         system_prompt = """You are an expert code reviewer. Analyze the provided code and give feedback on:
 
 Bugs & Logic Issues: Identify any errors or logical problems
