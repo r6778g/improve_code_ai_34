@@ -17,7 +17,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "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")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "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")
 
 headers1 = {
     "Authorization": f"Bearer {GITHUB_TOKEN}",  # ✅ f-string for correct variable substitution
