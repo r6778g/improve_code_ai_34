@@ -39,7 +39,7 @@ export default function Page() {
     const finalText = message.trim() || fileText.trim();
 
     if (!finalText) {
-      alert("Please provide some text or upload a file.");
+      alert("Please provide some text or upload a file.  this is final text");
       return;
     }
 
@@ -58,10 +58,9 @@ export default function Page() {
 
       const data = await res.json();
 
-      // Redirect to results page with query params
+
       const query = new URLSearchParams({
-        input: data.input,
-        input_type: data.input_type,
+        
         model_response: data.model_response,
       });
 
