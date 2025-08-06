@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Form, HTTPException
+from fastapi import FastAPI, Form, HTTPException, Request
 import os
 import requests
 import logging
@@ -13,10 +13,40 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["https://8939872d51c8.ngrok-free.app"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN","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")
+headers1 = {
+    "Authorization": "Bearer {GITHUB_TOKEN}",
+    "Accept": "application/vnd.github.v3+json"
+}
+
+
+@app.post("/")
+async def github_webhook(request: Request):
+    payload = await request.json()
+
+    # Extract basic info
+    action = payload.get("action")
+    pr_data = payload.get("pull_request")
+    repo = payload["repository"]["name"]
+    owner = payload["repository"]["owner"]["login"]
+    pr_number = pr_data["number"]
+
+    url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/files"
+    response = requests.get(url, headers=headers1)
+
+
+    files = response.json()
+    for file in files:
+        print("📄 File:", file["filename"])
+        print("📝 Patch:\n", file.get("patch"))
+
+
+
+    return {"message": "Webhook received"}
 
 HF_API_KEY = os.getenv("HF_API_KEY", "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")
 
@@ -28,7 +58,6 @@ headers = {
 
 def query_huggingface(text: str):
     try:
-       
         system_prompt = """You are an expert code reviewer. Analyze the provided code and give feedback on:
 
 Bugs & Logic Issues: Identify any errors or logical problems
