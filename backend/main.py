@@ -48,7 +48,20 @@ async def github_webhook(request: Request):
         
         logger.info(f"Processing PR #{pr_number} in {owner}/{repo}, action: {action}")
         
-        # Only process certain actions (opened, synchronize, etc.)
+        # Handle different PR actions
+        if action == "edited":
+            # Check what was edited
+            changes = payload.get("changes", {})
+            if "body" in changes or "title" in changes:
+                logger.info(f"PR #{pr_number} title/description was edited")
+                # You might want to re-analyze if description contains special commands
+                # For now, we'll skip file processing since code didn't change
+                return {"message": "PR metadata edited, no file processing needed"}
+            else:
+                logger.info(f"PR #{pr_number} edited but no relevant changes detected")
+                return {"message": "PR edited but no action needed"}
+        
+        # Process code-related actions
         if action not in ["opened", "synchronize", "reopened"]:
             logger.info(f"Ignoring action: {action}")
             return {"message": f"Action {action} ignored"}
@@ -90,7 +103,6 @@ async def github_webhook(request: Request):
     except Exception as e:
         logger.error(f"Error processing webhook: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Webhook processing failed: {str(e)}")
-
 
 HF_API_KEY = os.getenv("HF_API_KEY", "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")
 
