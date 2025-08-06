@@ -17,12 +17,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN","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")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "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")
+
 headers1 = {
-    "Authorization": "Bearer {GITHUB_TOKEN}",
+    "Authorization": f"Bearer {GITHUB_TOKEN}",  # ✅ f-string for correct variable substitution
     "Accept": "application/vnd.github.v3+json"
 }
-
 @app.post("/")
 async def github_webhook(request: Request):
     try:
