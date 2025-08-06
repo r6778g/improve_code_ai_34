@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
-
+# Get GitHub token from environment variable
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://8939872d51c8.ngrok-free.app"],
@@ -27,7 +27,6 @@ headers1 = {
 async def github_webhook(request: Request):
     try:
         payload = await request.json()
-        
         # Check if this is a pull request event
         if "pull_request" not in payload:
             logger.info("Not a pull request event, ignoring")
@@ -47,24 +46,7 @@ async def github_webhook(request: Request):
         
         logger.info(f"Processing PR #{pr_number} in {owner}/{repo}, action: {action}")
         
-        # Handle different PR actions
-        if action == "edited":
-            # Check what was edited
-            changes = payload.get("changes", {})
-            if "body" in changes or "title" in changes:
-                logger.info(f"PR #{pr_number} title/description was edited")
-                # You might want to re-analyze if description contains special commands
-                # For now, we'll skip file processing since code didn't change
-                return {"message": "PR metadata edited, no file processing needed"}
-            else:
-                logger.info(f"PR #{pr_number} edited but no relevant changes detected")
-                return {"message": "PR edited but no action needed"}
-        
-        # Process code-related actions
-        if action not in ["opened", "synchronize", "reopened"]:
-            logger.info(f"Ignoring action: {action}")
-            return {"message": f"Action {action} ignored"}
-        
+  
         # Get PR files
         url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/files"
         logger.info(f"Fetching files from: {url}")
