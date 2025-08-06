@@ -4,7 +4,8 @@ import requests
 import logging
 import traceback
 from fastapi.middleware.cors import CORSMiddleware
-
+from dotenv import load_dotenv
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -17,16 +18,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "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")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+if not GITHUB_TOKEN:
+    raise ValueError("GITHUB_TOKEN environment variable is required")
 
+GITHUB_TOKEN = GITHUB_TOKEN.strip()
+
+# ✅ CORRECT: Use 'token' for personal access tokens, not 'Bearer'
 headers1 = {
-    "Authorization": f"Bearer {GITHUB_TOKEN}",  # ✅ f-string for correct variable substitution
-    "Accept": "application/vnd.github.v3+json"
+    "Authorization": f"token {GITHUB_TOKEN}",
+    "Accept": "application/vnd.github.v3+json",
+    "User-Agent": "GitHub-Webhook-Handler"
 }
+
 @app.post("/")
 async def github_webhook(request: Request):
     try:
         payload = await request.json()
+        
         # Check if this is a pull request event
         if "pull_request" not in payload:
             logger.info("Not a pull request event, ignoring")
@@ -46,8 +55,18 @@ async def github_webhook(request: Request):
         
         logger.info(f"Processing PR #{pr_number} in {owner}/{repo}, action: {action}")
         
-  
-        # Get PR files
+        # ✅ SMART: Only process relevant actions
+        if action in ["closed", "locked", "unlocked"]:
+            logger.info(f"Ignoring action: {action}")
+            return {"message": f"Action {action} ignored"}
+        
+        if action == "edited":
+            changes = payload.get("changes", {})
+            if "body" in changes or "title" in changes:
+                logger.info(f"PR #{pr_number} title/description was edited")
+                return {"message": "PR metadata edited, no file processing needed"}
+        
+        # Get PR files for code-related actions
         url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/files"
         logger.info(f"Fetching files from: {url}")
         
@@ -55,10 +74,14 @@ async def github_webhook(request: Request):
         
         if response.status_code == 401:
             logger.error("GitHub API authentication failed - check your GITHUB_TOKEN")
+            logger.error("Make sure token has 'repo' scope and is not expired")
             raise HTTPException(status_code=500, detail="GitHub authentication failed")
         elif response.status_code == 403:
             logger.error("GitHub API rate limit or insufficient permissions")
             raise HTTPException(status_code=500, detail="GitHub API access denied")
+        elif response.status_code == 404:
+            logger.error("Repository or PR not found - check token permissions")
+            raise HTTPException(status_code=500, detail="Repository not accessible")
         elif response.status_code != 200:
             logger.error(f"GitHub API error: {response.status_code} - {response.text}")
             raise HTTPException(status_code=500, detail="Failed to fetch PR files")
@@ -79,14 +102,12 @@ async def github_webhook(request: Request):
             print(f"📝 Patch:\n{patch}")
             print("-" * 80)
         
-        # Here you can add your custom logic to process the files
-        # For example: code review, testing, deployment, etc.
-        
         return {
             "message": "Webhook processed successfully",
             "pr_number": pr_number,
             "files_count": len(files),
-            "repository": f"{owner}/{repo}"
+            "repository": f"{owner}/{repo}",
+            "action": action
         }
         
     except Exception as e:
