@@ -39,7 +39,7 @@ export default function Page() {
     const finalText = message.trim() || fileText.trim();
 
     if (!finalText) {
-      alert("Please provide some text or upload a file.");
+      alert("Please provide some text or upload a file.  this is final text");
       return;
     }
 
