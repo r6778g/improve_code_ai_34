@@ -23,7 +23,6 @@ headers1 = {
     "Accept": "application/vnd.github.v3+json"
 }
 
-
 @app.post("/")
 async def github_webhook(request: Request):
     try:
@@ -68,9 +67,17 @@ async def github_webhook(request: Request):
         
         # Get PR files
         url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/files"
+        logger.info(f"Fetching files from: {url}")
+        
         response = requests.get(url, headers=headers1, timeout=30)
         
-        if response.status_code != 200:
+        if response.status_code == 401:
+            logger.error("GitHub API authentication failed - check your GITHUB_TOKEN")
+            raise HTTPException(status_code=500, detail="GitHub authentication failed")
+        elif response.status_code == 403:
+            logger.error("GitHub API rate limit or insufficient permissions")
+            raise HTTPException(status_code=500, detail="GitHub API access denied")
+        elif response.status_code != 200:
             logger.error(f"GitHub API error: {response.status_code} - {response.text}")
             raise HTTPException(status_code=500, detail="Failed to fetch PR files")
         
@@ -103,6 +110,7 @@ async def github_webhook(request: Request):
     except Exception as e:
         logger.error(f"Error processing webhook: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Webhook processing failed: {str(e)}")
+
 
 HF_API_KEY = os.getenv("HF_API_KEY", "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")
 
