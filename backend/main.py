@@ -9,27 +9,124 @@ load_dotenv()
 # this is teat and my name is mohit
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 app = FastAPI()
-# Get GitHub token from environment variable
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://8939872d51c8.ngrok-free.app"],
+    allow_origins=["https://d9a538b0c699.ngrok-free.app"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Get GitHub token from environment variable
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 if not GITHUB_TOKEN:
     raise ValueError("GITHUB_TOKEN environment variable is required")
 
 GITHUB_TOKEN = GITHUB_TOKEN.strip()
 
-# ✅ CORRECT: Use 'token' for personal access tokens, not 'Bearer'
-headers1 = {
+# GitHub API headers
+headers_github = {
     "Authorization": f"token {GITHUB_TOKEN}",
     "Accept": "application/vnd.github.v3+json",
     "User-Agent": "GitHub-Webhook-Handler"
 }
+
+# Hugging Face API setup
+HF_API_KEY = os.getenv("HF_API_KEY", "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")
+API_URL = "https://router.huggingface.co/v1/chat/completions"
+headers_hf = {
+    "Authorization": f"Bearer {HF_API_KEY}",
+    "Content-Type": "application/json"
+}
+
+def post_comment_to_pr(owner: str, repo: str, pr_number: int, comment: str):
+    """Post a comment to the GitHub PR"""
+    try:
+        url = f"https://api.github.com/repos/{owner}/{repo}/issues/{pr_number}/comments"
+        
+        payload = {
+            "body": comment
+        }
+        
+        response = requests.post(url, headers=headers_github, json=payload, timeout=30)
+        
+        if response.status_code == 201:
+            logger.info(f"Successfully posted comment to PR #{pr_number}")
+            return True
+        else:
+            logger.error(f"Failed to post comment: {response.status_code} - {response.text}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error posting comment to PR: {str(e)}")
+        return False
+
+def query_huggingface(text: str):
+    """Query Hugging Face API for code review"""
+    try:
+        system_prompt = """You are an expert code reviewer. Analyze the provided code and give feedback on:
+
+**Bugs & Logic Issues**: Identify any errors or logical problems
+**Security**: Check for vulnerabilities and security best practices  
+**Performance**: Suggest optimizations and efficiency improvements
+**Code Quality**: Assess readability, naming, and structure
+**Best Practices**: Review adherence to coding standards
+
+**RECOMMENDATIONS**
+Categorize findings as:
+- 🚨 **Fix Now**: Bugs that break functionality, security vulnerabilities
+- ⚡ **Improve**: Performance bottlenecks, code quality issues, maintainability  
+- ✨ **Enhance**: Style consistency, documentation, minor optimizations
+
+Be concise but thorough. Format your response in GitHub-compatible markdown."""
+
+        payload = {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user", 
+                    "content": f"Please review this code:\n\n{text}"
+                }
+            ],
+            "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct:novita",
+            "temperature": 0.3,
+            "max_tokens": 900
+        }
+        
+        logger.info(f"Sending request to HF API with payload size: {len(str(payload))}")
+        
+        response = requests.post(
+            API_URL, 
+            headers=headers_hf, 
+            json=payload,
+            timeout=60  # Increased timeout for code review
+        )
+        
+        logger.info(f"HF API response status: {response.status_code}")
+        
+        if response.status_code != 200:
+            logger.error(f"HF API error: {response.status_code} - {response.text}")
+            response.raise_for_status()
+        
+        response_data = response.json()
+        logger.info("Successfully received response from HF API")
+        
+        return response_data
+        
+    except requests.exceptions.Timeout:
+        logger.error("Request to HF API timed out")
+        raise HTTPException(status_code=504, detail="Request timed out")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Request exception: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"External API error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error in query_huggingface: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise
 
 @app.post("/")
 async def github_webhook(request: Request):
@@ -55,7 +152,7 @@ async def github_webhook(request: Request):
         
         logger.info(f"Processing PR #{pr_number} in {owner}/{repo}, action: {action}")
         
-        # ✅ SMART: Only process relevant actions
+        # Only process relevant actions
         if action in ["closed", "locked", "unlocked"]:
             logger.info(f"Ignoring action: {action}")
             return {"message": f"Action {action} ignored"}
@@ -70,7 +167,7 @@ async def github_webhook(request: Request):
         url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/files"
         logger.info(f"Fetching files from: {url}")
         
-        response = requests.get(url, headers=headers1, timeout=30)
+        response = requests.get(url, headers=headers_github, timeout=30)
         
         if response.status_code == 401:
             logger.error("GitHub API authentication failed - check your GITHUB_TOKEN")
@@ -87,225 +184,101 @@ async def github_webhook(request: Request):
             raise HTTPException(status_code=500, detail="Failed to fetch PR files")
         
         files = response.json()
-        
         logger.info(f"Found {len(files)} files in PR #{pr_number}")
+        
+        # Process files and generate code reviews
+        all_reviews = []
+        code_files_count = 0
         
         for file in files:
             filename = file.get("filename", "Unknown")
             status = file.get("status", "Unknown")
             additions = file.get("additions", 0)
             deletions = file.get("deletions", 0)
-            patch = file.get("patch", "No patch available")
+            patch = file.get("patch", "")
             
-            print(f"📄 File: {filename}")
-            print(f"📊 Status: {status} (+{additions}/-{deletions})")
-            print(f"📝 Patch:\n{patch}")
-            print("-" * 80)
+            # Skip non-code files or files without patches
+            if not patch or patch == "No patch available":
+                logger.info(f"Skipping {filename} - no patch data")
+                continue
+                
+            # Filter for code files (you can customize these extensions)
+            code_extensions = ['.py', '.js', '.ts', '.java', '.cpp', '.c', '.go', '.rs', '.php', '.rb', '.cs', '.swift', '.kt']
+            if not any(filename.lower().endswith(ext) for ext in code_extensions):
+                logger.info(f"Skipping {filename} - not a code file")
+                continue
+            
+            logger.info(f"Processing code file: {filename}")
+            code_files_count += 1
+            
+            try:
+                # Get AI review for this file
+                review_response = query_huggingface(patch)
+                
+                if review_response and 'choices' in review_response:
+                    review_content = review_response['choices'][0]['message']['content']
+                    
+                    file_review = f"""## 📄 Code Review: `{filename}`
+**Status**: {status} (+{additions}/-{deletions} lines)
+
+{review_content}
+
+---"""
+                    
+                    all_reviews.append(file_review)
+                    logger.info(f"Generated review for {filename}")
+                else:
+                    logger.warning(f"No valid review response for {filename}")
+                    
+            except Exception as e:
+                logger.error(f"Error reviewing {filename}: {str(e)}")
+                error_review = f"""## 📄 Code Review: `{filename}`
+**Status**: {status} (+{additions}/-{deletions} lines)
+
+❌ **Error**: Unable to generate review for this file due to processing error.
+
+---"""
+                all_reviews.append(error_review)
+        
+        # Post comprehensive comment if we have reviews
+        if all_reviews:
+            comment_header = f"""# 🤖 AI Code Review
+**PR #{pr_number}**: Automated code review completed
+
+**Summary**: Reviewed {code_files_count} code file(s) with AI assistance.
+
+"""
+            
+            full_comment = comment_header + "\n".join(all_reviews)
+            
+            # GitHub has a comment size limit (~65KB), so truncate if needed
+            if len(full_comment) > 60000:
+                full_comment = full_comment[:60000] + "\n\n*Comment truncated due to length limit.*"
+            
+            success = post_comment_to_pr(owner, repo, pr_number, full_comment)
+            
+            if success:
+                logger.info(f"Successfully posted AI code review to PR #{pr_number}")
+            else:
+                logger.error(f"Failed to post AI code review to PR #{pr_number}")
+        else:
+            logger.info(f"No code files to review in PR #{pr_number}")
         
         return {
             "message": "Webhook processed successfully",
             "pr_number": pr_number,
             "files_count": len(files),
+            "code_files_reviewed": code_files_count,
             "repository": f"{owner}/{repo}",
-            "action": action
+            "action": action,
+            "review_posted": len(all_reviews) > 0
         }
         
     except Exception as e:
         logger.error(f"Error processing webhook: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Webhook processing failed: {str(e)}")
 
-
-HF_API_KEY = os.getenv("HF_API_KEY", "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")
-
-API_URL = "https://router.huggingface.co/v1/chat/completions"
-headers = {
-    "Authorization": f"Bearer {HF_API_KEY}",
-    "Content-Type": "application/json"
-}
-
-def query_huggingface(text: str):
-    try:
-        system_prompt = """You are an expert code reviewer. Analyze the provided code and give feedback on:
-
-Bugs & Logic Issues: Identify any errors or logical problems
-Security: Check for vulnerabilities and security best practices
-Performance: Suggest optimizations and efficiency improvements
-Code Quality: Assess readability, naming, and structure
-Best Practices: Review adherence to coding standards
-
-RECOMMENDATIONS
-Categorize findings as:
-
-Fix Now: Bugs that break functionality, security vulnerabilities
-Improve: Performance bottlenecks, code quality issues, maintainability
-Enhance: Style consistency, documentation, minor optimizations
-
-Be concise but thorough.
-
-Example Code Review
-Code Submitted:
-pythonimport hashlib
-import sqlite3
-
-def login_user(username, password):
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    
-    query = f"SELECT * FROM users WHERE username = '{username}' AND password = '{password}'"
-    result = cursor.execute(query).fetchone()
-    
-    if result:
-        return True
-    else:
-        return False
-
-def hash_password(password):
-    return hashlib.md5(password.encode()).hexdigest()
-
-class UserManager:
-    def __init__(self):
-        self.users = []
-    
-    def addUser(self, user):
-        self.users.append(user)
-        
-    def findUser(self, username):
-        for i in range(0, len(self.users)):
-            if self.users[i].username == username:
-                return self.users[i]
-        return None
-Code Review Analysis
-🚨 Fix Now
-
-SQL Injection Vulnerability (Line 7)
-
-Issue: Direct string interpolation in SQL query allows injection attacks
-Impact: Complete database compromise possible
-Fix: Use parameterized queries
-
-pythonquery = "SELECT * FROM users WHERE username = ? AND password = ?"
-result = cursor.execute(query, (username, password)).fetchone()
-
-Weak Cryptographic Hash (Line 15)
-
-Issue: MD5 is cryptographically broken and unsuitable for passwords
-Impact: Passwords easily crackable with rainbow tables
-Fix: Use bcrypt, scrypt, or Argon2
-
-pythonimport bcrypt
-return bcrypt.hashpw(password.encode(), bcrypt.gensalt())
-
-Resource Leak (Line 5)
-
-Issue: Database connection never closed
-Impact: Connection pool exhaustion under load
-Fix: Use context manager or explicit close()
-
-
-
-⚡ Improve
-
-Inefficient Linear Search (Line 26-29)
-
-Issue: O(n) time complexity for user lookup
-Impact: Poor performance with large user lists
-Fix: Use dictionary for O(1) lookups
-
-pythonself.users = {}  # username -> user mapping
-
-Poor Error Handling
-
-Issue: No exception handling for database operations
-Impact: Application crashes on DB errors
-Fix: Add try-catch blocks with proper error responses
-
-
-Inconsistent Return Pattern (Line 9-12)
-
-Issue: Explicit True/False return instead of direct boolean
-Fix: return bool(result) or return result is not None
-✨ Enhance
-Naming Convention Inconsistency
-Issue: Mixed camelCase (addUser) and snake_case (login_user)
-Fix: Use consistent snake_case per PEP 8
-
-
-Missing Type Hints
-
-Enhancement: Add type annotations for better code clarity
-
-pythondef login_user(username: str, password: str) -> bool:
-
-No Docstrings
-
-Enhancement: Add function documentation
-
-pythondef login_user(username: str, password: str) -> bool:
-    ""Authenticate user credentials against database.""
-
-Magic Numbers/Strings
-
-Issue: Hardcoded database filename
-Fix: Use configuration constants
-
-
-
-Summary
-
-Critical Issues: 3 security vulnerabilities requiring immediate attention
-Performance Issues: 1 scalability concern
-Code Quality: 6 improvements for maintainability and standards compliance
-
-Priority: Address SQL injection and weak hashing immediately before deployment.
-
-Use this format and depth of analysis when reviewing code"""
-
-        payload = {
-            "messages": [
-                {
-                    "role": "system",
-                    "content": system_prompt
-                },
-                {
-                    "role": "user", 
-                    "content": f"Please review this code:\n\n{text}"
-                }
-            ],
-            "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct:novita",
-            "temperature": 0.3,
-            "max_tokens": 1900
-        }
-        
-        logger.info(f"Sending request to HF API with payload size: {len(str(payload))}")
-        
-        response = requests.post(
-            API_URL, 
-            headers=headers, 
-            json=payload,
-            timeout=30  # Add timeout
-        )
-        
-        logger.info(f"HF API response status: {response.status_code}")
-        
-        if response.status_code != 200:
-            logger.error(f"HF API error: {response.status_code} - {response.text}")
-            response.raise_for_status()
-        
-        response_data = response.json()
-        logger.info("Successfully received response from HF API")
-        
-        return response_data
-        
-    except requests.exceptions.Timeout:
-        logger.error("Request to HF API timed out")
-        raise HTTPException(status_code=504, detail="Request timed out")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Request exception: {str(e)}")
-        raise HTTPException(status_code=502, detail=f"External API error: {str(e)}")
-    except Exception as e:
-        logger.error(f"Unexpected error in query_huggingface: {str(e)}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        raise
 
 @app.post("/process/")
 async def process_input(text: str = Form(None)):
