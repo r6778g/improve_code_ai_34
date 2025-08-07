@@ -6,7 +6,7 @@ import traceback
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 load_dotenv()
-
+#this is teat
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
